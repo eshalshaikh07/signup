@@ -1,137 +1,102 @@
 import React, { useState, useEffect } from 'react';
 import { db, auth, provider } from './firebaseConfig';
-import { collection, getDocs, query, where, setDoc, doc } from 'firebase/firestore';
-import { Link, Navigate } from 'react-router-dom'; 
+import { collection, getDocs, query, where } from 'firebase/firestore';
+import { Link, useNavigate } from 'react-router-dom';
 import { signInWithEmailAndPassword, signInWithPopup } from 'firebase/auth';
 import './App.css';
 
 const Login = ({ setUserDetails, setUserDocId }) => {
   const [formData, setFormData] = useState({ email: '', password: '' });
-  const [username, setUsername] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [isNewUser, setIsNewUser] = useState(false);
-  const [currentUser, setCurrentUser] = useState(null);
-  const [redirectHome, setRedirectHome] = useState(false);
-  const [userDataDetails, setUserDataDetails] = useState(null);
-  const [userDataDocId, setUserDataDocId] = useState(null);
+  const [greeting, setGreeting] = useState(''); // Store greeting message
+  const [isLoggedIn, setIsLoggedIn] = useState(false); // Track if the user is logged in
+  const [loginError, setLoginError] = useState('');
+  const navigate = useNavigate();
 
+  // Check if the user is already logged in
   useEffect(() => {
     const unsubscribe = auth.onAuthStateChanged((user) => {
       if (user) {
-        setCurrentUser(user);
-        fetchUserData(user.email); // Fetch user data if user is authenticated
-      } else {
-        setCurrentUser(null);
+        fetchUserData(user.email);
       }
     });
-
     return () => unsubscribe();
   }, []);
 
-  const fetchUserData = async (email) => {
-    try {
-      const userRef = collection(db, 'users');
-      const q = query(userRef, where('email', '==', email));
-      const querySnapshot = await getDocs(q);
-
-      if (!querySnapshot.empty) {
-        const userDataFromSnapshot = querySnapshot.docs[0].data();
-        const docId = querySnapshot.docs[0].id;
-        setUserDetails(userDataFromSnapshot);
-        setUserDocId(docId); // Set the user document ID
-        setUserDataDetails(userDataFromSnapshot); // Save user details in component state
-        setUserDataDocId(docId); // Save user doc ID in component state
-
-        // Redirect to home or another page after login
-        setRedirectHome(true);
-      } else {
-        console.log('User data not found in users collection for email:', email);
-      }
-    } catch (error) {
-      console.error('Error fetching user data:', error);
-    }
-  };
-
-  const handleChange = (e) => {
-    const { name, value } = e.target;
-    setFormData({ ...formData, [name]: value });
-  };
-
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (!formData.email || !formData.password) {
+      setLoginError('Please provide both email and password.');
+      return;
+    }
     try {
       const userCredential = await signInWithEmailAndPassword(auth, formData.email, formData.password);
       const user = userCredential.user;
       fetchUserData(user.email);
-      alert('Login successful');
     } catch (error) {
-      console.error('Error during login: ', error);
-      if (error.code === 'auth/invalid-email' || error.code === 'auth/wrong-password') {
-        alert('Invalid email or password. Please check your credentials.');
-      } else {
-        alert('An unexpected error occurred. Please try again later.');
-      }
+      handleLoginError(error);
     }
+  };
+
+  const handleLoginError = (error) => {
+    if (error.code === 'auth/invalid-email' || error.code === 'auth/wrong-password') {
+      setLoginError('Invalid email or password.');
+    } else if (error.code === 'auth/user-not-found') {
+      setLoginError('User not found.');
+    } else {
+      setLoginError('An unexpected error occurred. Please try again later.');
+    }
+    console.error('Error during login:', error);
   };
 
   const signInWithGoogle = async () => {
     try {
       const result = await signInWithPopup(auth, provider);
       const user = result.user;
-      const userRef = collection(db, 'users');
-      const q = query(userRef, where('email', '==', user.email));
-      const querySnapshot = await getDocs(q);
+      fetchUserData(user.email);
+    } catch (error) {
+      console.error('Error during Google sign-in:', error);
+      handleLoginError(error);
+    }
+  };
 
-      if (querySnapshot.empty) {
-        setCurrentUser(user);
-        setIsNewUser(true);
+  // Fetch user data and determine redirection
+  const fetchUserData = async (email) => {
+    try {
+      const adminRef = collection(db, 'admin');
+      const usersRef = collection(db, 'users');
+
+      const adminQuery = query(adminRef, where('email', '==', email));
+      const usersQuery = query(usersRef, where('email', '==', email));
+
+      const [adminSnapshot, userSnapshot] = await Promise.all([getDocs(adminQuery), getDocs(usersQuery)]);
+
+      if (!adminSnapshot.empty) {
+        const adminData = adminSnapshot.docs[0].data();
+        setUserDetails(adminData);
+        setUserDocId(adminSnapshot.docs[0].id);
+        setGreeting('Hey Admin!');
+        setIsLoggedIn(true);
+        navigate('/admin'); // Redirect to admin page
+      } else if (!userSnapshot.empty) {
+        const userData = userSnapshot.docs[0].data();
+        setUserDetails(userData);
+        setUserDocId(userSnapshot.docs[0].id);
+        setGreeting('Hey User!');
+        setIsLoggedIn(true);
+        navigate('/home'); // Redirect to home page
       } else {
-        const userDataFromSnapshot = querySnapshot.docs[0].data();
-        const docId = querySnapshot.docs[0].id;
-        setUserDetails(userDataFromSnapshot);
-        setUserDocId(docId);
-        setUserDataDetails(userDataFromSnapshot); // Save user details in component state
-        setUserDataDocId(docId); // Save user doc ID in component state
-        alert('User already exists, logging you in.');
-
-        // Redirect to home or another page after login
-        setRedirectHome(true);
+        setLoginError('No account found for this email.');
       }
     } catch (error) {
-      console.error('Error during Google sign-in: ', error);
+      console.error('Error fetching user data:', error);
     }
   };
-
-  const handleUsernameSubmit = async (e) => {
-    e.preventDefault();
-    try {
-      await setDoc(doc(db, 'users', currentUser.uid), {
-        email: currentUser.email,
-        username,
-        password: newPassword,
-      });
-      alert('User data saved successfully');
-      setIsNewUser(false);
-      setCurrentUser(null);
-      setUsername('');
-      setNewPassword('');
-
-      // Redirect to home or another page after saving user data
-      setRedirectHome(true);
-    } catch (error) {
-      console.error('Error saving user data: ', error);
-    }
-  };
-
-  if (redirectHome) {
-    return <Navigate to="/home" />;
-  }
 
   return (
     <div>
-      <h2>Login</h2>
-      {!isNewUser ? (
+      {!isLoggedIn ? (
         <>
+          <h2>Login</h2>
           <form onSubmit={handleSubmit}>
             <div>
               <label htmlFor="email">Email:</label>
@@ -140,7 +105,7 @@ const Login = ({ setUserDetails, setUserDocId }) => {
                 id="email"
                 name="email"
                 value={formData.email}
-                onChange={handleChange}
+                onChange={(e) => setFormData({ ...formData, email: e.target.value })}
                 required
               />
             </div>
@@ -151,42 +116,22 @@ const Login = ({ setUserDetails, setUserDocId }) => {
                 id="password"
                 name="password"
                 value={formData.password}
-                onChange={handleChange}
+                onChange={(e) => setFormData({ ...formData, password: e.target.value })}
                 required
               />
             </div>
             <button type="submit">Login</button>
+            {loginError && <p className="error">{loginError}</p>}
           </form>
           <button onClick={signInWithGoogle}>Sign in with Google</button>
+          <p>Don't have an account? <Link to="/">Sign up</Link></p>
         </>
       ) : (
-        <form onSubmit={handleUsernameSubmit}>
-          <div>
-            <label htmlFor="username">Username:</label>
-            <input
-              type="text"
-              id="username"
-              name="username"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              required
-            />
-          </div>
-          <div>
-            <label htmlFor="password">Password:</label>
-            <input
-              type="password"
-              id="password"
-              name="password"
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-              required
-            />
-          </div>
-          <button type="submit">Submit</button>
-        </form>
+        <div>
+          <h1>{greeting}</h1>
+          <p>Redirecting you to your dashboard...</p>
+        </div>
       )}
-      <p>Don't have an account? <Link to="/">Sign up</Link></p>
     </div>
   );
 };
